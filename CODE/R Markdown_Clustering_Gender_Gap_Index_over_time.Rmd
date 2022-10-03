@@ -1,0 +1,838 @@
+---
+title: "Standard"
+author: "Paula Costa Fontichiari, Miriam Giuliani"
+date: "5/6/2020"
+output: pdf_document
+toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Packages needed:
+```{r, message=F}
+library(dtw)
+library(dendextend)
+library(factoextra)
+library(NbClust)
+library(cluster)
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(dtwclust)
+library(BNPTSclust)
+```
+
+
+
+# 1. Importing and Manipulating the Data 
+
+
+We imported the data set and inverted the order of the years from $2019:2006$ to $2006:2019$. We eliminated the NAs because we would not be able to compute the distance matrix in the further steps. 
+
+Originally, we had $157$ countries (rows); after removing the NAs we got $106$ countries. 
+
+```{r}
+D <-
+  read.csv2(
+    file = 'GGI.csv',
+    header = T,
+    sep = ';',
+    row.names = 1,
+    na.strings = ''
+  )
+str(D)
+head(D)
+D <- D[c(14:1)]
+names(D) <- c(2006:2019)
+D <- na.omit(D) 
+str(D)
+head(D)
+```
+
+# 2. Hierarchical Clustering
+
+## 2.1 Using Dynamic Time Warping Distance
+
+### 2.1.1 Computing the Distance Matrix
+
+```{r, message=F}
+distance <- dist(D, method = 'DTW')
+```
+
+### 2.1.2 Applying the Hierarchical Algorithm
+
+We tried different linkage methods. 
+
+```{r}
+hc <- hclust(distance, method = 'average')
+hc2 <- hclust(distance, method = 'complete')
+hc3 <- hclust(distance, method = 'single')
+```
+
+### 2.1.3 Plotting the Dendrograms
+
+```{r}
+plot(
+  hc,
+  cex = .5,
+  hang = -1,
+  col = 'blue',
+  main = 'Average'
+)
+
+
+plot(
+  hc2,
+  cex = .5,
+  hang = -1,
+  col = 'blue',
+  main = 'Complete'
+)
+
+plot(
+  hc3,
+  cex = .5,
+  hang = -1,
+  col = 'blue',
+  main = 'Single'
+)
+```
+
+### 2.1.4 Comparing Complete and Average Linkage
+
+*Tanglegram* plots the two dendrograms, side by side, with their labels connected by lines. The output displays *unique* nodes, with a combination of labels/items not present in the other tree, highlighted with dashed lines.
+
+*Entanglement* is a measure between $1$ (*full entanglement*) and $0$ (*no entanglement*). A lower entanglement coefficient corresponds to a good alignment.
+
+```{r, message=F}
+dend1 <- as.dendrogram (hc2) #Complete
+dend2 <- as.dendrogram (hc) #Average
+tanglegram(
+  dend1,
+  dend2,
+  common_subtrees_color_branches = TRUE,
+  margin_inner = 0.5,
+  lwd = 1.9
+)
+entanglement(dend1, dend2) 
+```
+
+
+### 2.1.5 Choice and Validation of the Optimal Number of Clusters
+
+**Elbow Method**:
+
+```{r, cho=T, message=F}
+fviz_nbclust(D, FUN = hcut, method = "wss")
+```
+
+**Silhouette Method**:
+
+```{r, message=F}
+# method 1
+a <-
+  NbClust(
+    data = D,
+    diss = distance,
+    distance = NULL,
+    min.nc = 2,
+    max.nc = 7,
+    method = 'average',
+    index = 'silhouette'
+  )
+fviz_nbclust(a, diss = dist(D, distance), method = "silhouette")
+
+#method 2
+
+hc.cut <- hcut(distance, k = 4, hc_method = "average")
+hc.cut3 <- hcut(distance, k = 3, hc_method = "average")
+par(mfrow = c(1, 2))
+fviz_silhouette(hc.cut, label = F, print.summary = TRUE)
+fviz_silhouette(hc.cut3, label = F, print.summary = TRUE)
+
+#method 3
+ar <- agnes(distance, method = 'average')
+si3 <- silhouette(cutree(ar, k = 3),
+                  distance)
+si4 <- silhouette(cutree(ar, k = 4),
+                  distance)
+
+
+plot(
+  si3,
+  border = NA,
+  main = 'K=3',
+  nmax = 80,
+  cex.names = 0.7,
+  col = c('aquamarine2', 'lightpink1', 'cadetblue1')
+)
+
+plot(
+  si4,
+  nmax = 80,
+  cex.names = 0.7,
+  col = c('aquamarine2', 'lightpink1', 'cadetblue1', 'purple'),
+  main = "K=4",
+  border = NA
+)
+```
+
+### 2.1.6 Cutting the Dendrogram
+
+By comparison, we chose the *average* linkage. 
+
+```{r}
+plot(
+  hc,
+  cex = .5,
+  hang = -1,
+  col = 'blue',
+  main = 'Dendrogram - Distance: DTW, Linkage: Average'
+)
+rect.hclust(hc, k = 4, border = 'orange')
+```
+
+### 2.1.7 Extracting the Clusters
+
+```{r, message=F}
+cut_avg <- cutree(hc, k = 4)
+D_ <- mutate(D, cluster = cut_avg)
+count(D_, cluster)
+rownames(D_) <- rownames(D)
+D_ <- D_[15:1]
+head(D_)
+
+fnt <- function(i) {
+  cluster <- rownames(D_)[D_$cluster == i]
+  return(cluster)
+}
+sapply(1:4, FUN = fnt)
+```
+
+### 2.1.8 Visualizing the Clusters
+
+```{r,message=F}
+country <- rownames(D_)
+D_ <- cbind(country, D_)
+D_long <- D_ %>%
+  pivot_longer(
+    cols = c(-country, -cluster),
+    names_to = "year",
+    values_to = "Index"
+  ) %>%
+  mutate(year = ymd(paste0(year, "-01-01")))
+
+ggplot() +
+  geom_line(data = D_long,
+            aes(y = Index, x = year, group = country),
+            colour = "deepskyblue3") +
+  facet_wrap(~ cluster, nrow = 1) +
+  labs(title = "Gender Gap Index from 2006 to 2019 - DTW Distance",
+       caption = "The different time series have been clustered using hierarchical method")
+```
+
+## 2.2 Using Euclidean Distance
+
+### 2.2.1 Computing the Distance Matrix
+
+```{r}
+distance2 <- dist(D,method = "euclidean")
+```
+
+### 2.2.2 Applying the Hierarchical Algorithm
+
+We also included *ward* linkage, since it exploits Euclidean distance. 
+
+```{r}
+hce <- hclust(d = distance2, method = 'average')
+hce2 <- hclust(d = distance2, method = 'complete')
+hce3 <- hclust(d = distance2, method = 'single')
+hce4 <- hclust(d = distance2, method = 'ward.D2')
+```
+
+### 2.2.3 Plotting the Dendrograms
+
+```{r}
+plot(
+  hce2,
+  cex = .5,
+  hang = -1,
+  col = 'blue',
+  main = 'Average'
+)
+
+plot(
+  hce2,
+  cex = .5,
+  hang = -1,
+  col = 'blue',
+  main = 'Complete'
+)
+plot(
+  hce3,
+  cex = .5,
+  hang = -1,
+  col = 'blue',
+  main = 'Single'
+)
+
+plot(
+  hce4,
+  cex = .5,
+  hang = -1,
+  col = 'blue',
+  main = 'ward'
+)
+```
+
+### 2.2.4 Choice and Validation of the Optimal Number of Clusters
+
+**Elbow Method**: same as the one for DTW. 
+
+
+**Silhouette Method**:
+
+```{r}
+ # method 1
+E <-
+  NbClust(
+    data = D,
+    diss = distance2,
+    distance = NULL,
+    min.nc = 2,
+    max.nc = 7,
+    method = 'average',
+    index = 'silhouette'
+  )
+fviz_nbclust(a, diss = dist(D, distance2), method = "silhouette")
+
+#method 2
+
+hc.cute <- hcut(distance2, k = 4, hc_method = "average")
+hc.cute3 <- hcut(distance2, k = 3, hc_method = "average")
+par(mfrow = c(1, 2))
+fviz_silhouette(hc.cute, label = F, print.summary = TRUE)
+fviz_silhouette(hc.cute3, label = F, print.summary = TRUE)
+
+#method 3
+are <- agnes(distance2, method = 'average')
+sie3 <- silhouette(cutree(are, k = 3),
+                   distance2)
+sie4 <- silhouette(cutree(are, k = 4),
+                   distance2)
+
+
+plot(
+  sie3,
+  border = NA,
+  main = 'K=3',
+  nmax = 80,
+  cex.names = 0.7,
+  col = c('aquamarine2', 'lightpink1', 'cadetblue1')
+)
+
+plot(
+  sie4,
+  nmax = 80,
+  cex.names = 0.7,
+  col = c('aquamarine2', 'lightpink1', 'cadetblue1', 'purple'),
+  main = "K=4",
+  border = NA
+)
+```
+
+
+### 2.2.5 Cutting the Dendrogram
+
+```{r}
+plot(
+  hce,
+  cex = .5,
+  hang = -1,
+  col = 'blue',
+  main = 'Dendrogram - Distance: Euclidean, Linkage: Average'
+)
+rect.hclust(hce, k = 4, border = 'orange')
+```
+
+### 2.2.6 Extracting the Clusters
+
+```{r}
+cute <- cutree(hce, k = 4)
+De <- mutate(D, cluster = cute)
+count(De, cluster)
+rownames(De) <- rownames(D)
+De <- De[15:1]
+head(De)
+
+fnte <- function(i) {
+  cluster <- rownames(De)[De$cluster == i]
+  return(cluster)
+}
+sapply(1:4, FUN = fnte)
+```
+
+### 2.2.7 Visualizing the Clusters
+
+```{r}
+country <- rownames(De)
+De <- cbind(country, De)
+Delong <- De %>%
+  pivot_longer(
+    cols = c(-country, -cluster),
+    names_to = "year",
+    values_to = "Index"
+  ) %>%
+  mutate(year = ymd(paste0(year, "-01-01")))
+
+ggplot() +
+  geom_line(data = Delong,
+            aes(y = Index, x = year, group = country),
+            colour = "deepskyblue3") +
+  facet_wrap(~ cluster, nrow = 1) +
+  labs(title = "Gender Gap Index from 2006 to 2019 - Euclidean Distance",
+       caption = "The different time series have been clustered using hierarchical method")
+```
+
+# 3. K-Medoids
+
+## 3.1 Choosing the Number of Clusters
+
+**Elbow Method**:
+
+```{r}
+fviz_nbclust(
+  D,
+  FUNcluster = pam,
+  method = "wss",
+  diss = NULL,
+  k.max = 10,
+  linecolor = 'dodgerblue2'
+)
+```
+
+## 3.2 Applying the K-Medoids
+
+We apply the algorithm for $k=3$ and $k=4$. 
+
+```{r}
+set.seed(123)
+pam3 <- pam(distance, 3 , stand = FALSE, diss = T)
+pam4 <- pam(distance, 4 , stand = FALSE, diss = T)
+```
+
+## 3.3 Validating the Clusters
+
+**Silhouette method**:
+```{r}
+plot(
+  silhouette(pam3$cluster, distance),
+  col = c('aquamarine2', 'lightpink1', 'cadetblue1'),
+  border = NA,
+  main = ''
+)
+title("K = 3", adj = 0.5, line = 1)
+
+plot(
+  silhouette(pam4$cluster, distance),
+  col = c('aquamarine2', 'lightpink1', 'cadetblue1', 'slateblue1'),
+  border = NA,
+  main = ''
+)
+title("K = 4", adj = 0.5, line = 1)
+```
+
+## 3.4 Extracting the Clusters
+
+With $k=3$:
+
+```{r}
+Dpam3 <- mutate(D, cluster = pam3$clustering)
+rownames(Dpam3) <- rownames(D)
+fnt3 <- function(i) {
+  cluster <- rownames(Dpam3)[Dpam3$cluster == i]
+  return(cluster)
+}
+sapply(1:3, FUN = fnt3)
+```
+
+With $k=4$:
+
+```{r}
+Dpam4 <- mutate(D, cluster = pam4$clustering)
+rownames(Dpam4) <- rownames(D)
+fnt4 <- function(i) {
+  cluster <- rownames(Dpam4)[Dpam4$cluster == i]
+  return(cluster)
+}
+sapply(1:4, FUN = fnt4)
+```
+
+## 3.5 Visualizing the Clusters
+
+With $k=3$:
+
+```{r}
+Dpam3 <- cbind(country,Dpam3)
+Dpam3_long <- Dpam3 %>%
+  pivot_longer(
+    cols = c(-country,-cluster),
+    names_to = "year",
+    values_to = "avh"
+  ) %>%
+  mutate(year = ymd(paste0(year, "-01-01")))
+pam3$medoids
+medoids <- Dpam3[c(39,28,45),] #extracting medoids from Dpam3 (we used grep function to
+#identify position of rows)
+medoids
+medoids_long <- medoids %>%
+  pivot_longer(cols = c(-cluster,-country),
+               names_to = "year",
+               values_to = "avh") %>%
+  mutate(year = ymd(paste0(year, "-01-01")))
+
+ggplot() +
+  geom_line(data = Dpam3_long,
+            aes(y = avh, x = year, group = country),
+            colour = "deepskyblue3") +
+  facet_wrap( ~ cluster, nrow = 1) +
+  geom_line(
+    data = medoids_long,
+    aes(y = avh, x = year, group = cluster),
+    col = "darkorange1",
+    size = 2
+  )  +
+  labs(title = "K Medoids - k = 3",
+       caption = "The different time series have been clustered using k-medoids")
+```
+
+```{r}
+Dpam4 <- cbind(country,Dpam4)
+Dpam4_long <- Dpam4 %>%
+  pivot_longer(
+    cols = c(-country,-cluster),
+    names_to = "year",
+    values_to = "avh"
+  ) %>%
+  mutate(year = ymd(paste0(year, "-01-01")))
+pam4$medoids
+medoids2 <- Dpam4[c(64,28,79,74),] #extracting medoids from Dpam4 (we used grep function
+#to identify position of rows)
+medoids2
+medoids2_long <- medoids2 %>%
+  pivot_longer(cols = c(-cluster,-country),
+               names_to = "year",
+               values_to = "avh") %>%
+  mutate(year = ymd(paste0(year, "-01-01")))
+
+ggplot() +
+  geom_line(data = Dpam4_long,
+            aes(y = avh, x = year, group = country),
+            colour = "deepskyblue3") +
+  facet_wrap( ~ cluster, nrow = 1) +
+  geom_line(
+    data = medoids2_long,
+    aes(y = avh, x = year, group = cluster),
+    col = "darkorange1",
+    size = 2
+  )  +
+  labs(title = "K Medoids - k = 4",
+       caption = "The different time series have been clustered using k-medoids")
+```
+
+# 4. Cluster Validity Assessment
+
+Using the **dtwclust** package, we compute the clusters again in order to apply the **cvi** function that returns necessary indexes to compare methods. 
+
+The indexes are:
+
+*	*Sil*: Silhouette index to be maximized
+*	*D*: Dunn index to be maximized
+*	*COP*: COP index to be minimized
+*	*DB*: Davies-Bouldin index to be minimized
+*	*DB*: Modified Davies-Bouldin index to be minimized
+*	*CH*: Calinski-Harabasz index to be maximized
+*	*SF*: Score Function to be maximized
+
+
+```{r}
+set.seed(123)
+clust.hier3 <-
+  tsclust(D,
+          type = "hierarchical",
+          k = 3,
+          distance = "dtw") # Hierarchical - k = 3
+clust.hier4 <-
+  tsclust(D,
+          type = "hierarchical",
+          k = 4,
+          distance = "dtw") # Hierarchical - k = 4
+clust.pam3 <-
+  tsclust(
+    D,
+    type = "partitional",
+    k = 3,
+    distance = "dtw",
+    centroid = "pam"
+  ) # K-Medoids - k = 3
+clust.pam4 <-
+  tsclust(
+    D,
+    type = "partitional",
+    k = 4,
+    distance = "dtw",
+    centroid = "pam"
+  ) # K-Medoids - k = 4
+```
+
+## 4.1 Hierarchical k = 3 X k = 4 
+
+```{r}
+cvi(clust.hier3)
+cvi(clust.hier4)
+```
+
+## 4.2 K-Medoids k = 3 X k = 4 
+
+```{r}
+cvi(clust.pam3)
+cvi(clust.pam4)
+```
+
+
+## 4.3 Hierarchical X K-Medoids, k = 3
+
+```{r}
+cvi(clust.hier3)
+cvi(clust.pam3)
+```
+
+
+## 4.4 Hierarchical X K-Medoids, k = 4
+
+```{r}
+cvi(clust.hier4)
+cvi(clust.pam4)
+```
+
+# 5. Non parametric clustering
+
+## 5.1 CRP generator
+
+We report the code used to produced the plots in the section about CRP. 
+
+```{r}
+crp = function(num.customers, alpha) {
+  table = c(1)
+  next.table <- 2
+  for (i in 1:num.customers) {
+    if (runif(1, 0, 1) < alpha / (alpha + i)) {
+      # the customers sits in a new table
+      table <- c(table, next.table)
+      next.table <- next.table + 1
+    } else {
+      # the customer sits in a table already occupied
+      select.table <- table[sample(1:length(table), 1)]
+      table <- c(table, select.table)
+    }
+  }
+  table
+}
+# Plot the random partition of 10.000 customers for different values # of the concentration parameter
+par(mfrow = c(2, 2))
+plot(
+  table(crp(10000, 1))
+  ,
+  xlab = "Table Index",
+  ylab = "Frequency",
+  col = 'cornflowerblue',
+  main = expression(paste(alpha,' = 1'))
+)
+plot(
+  table(crp(10000, 4))
+  ,
+  xlab = "Table Index",
+  ylab = "Frequency",
+  col = 'cornflowerblue',
+  main = expression(paste(alpha,' = 4'))
+)
+plot(
+  table(crp(10000, 20))
+  ,
+  xlab = "Table Index",
+  ylab = "Frequency",
+  col = 'cornflowerblue',
+  main = expression(paste(alpha,' = 20'))
+)
+plot(
+  table(crp(10000, 50))
+  ,
+  xlab = "Table Index",
+  ylab = "Frequency",
+  col = 'cornflowerblue',
+  main = expression(paste(alpha,' = 50'))
+)
+```
+
+
+## 5.2 BNPTSclust: Clustering algorithm
+
+We report the code of the output of interests contained in the slides. Since the algorithm is computationally intensive (some cases took a few hours to be run completely) and the complete ouput printed is very long, we report here only the codes we used for the case of interest commented in the slides. 
+The relevant outputs of all the algorithm runs contained in the table of the results can be found in the pdf file called *Algorithm_runs_outputs.pdf*. 
+
+It is assumed that the periods of the series appear as the row names of the file; for this reason, we need to use the transpose of the original data set (that is, *GGIts.csv*). We actually transposed our original dataset in excel, but we could have done it in R as follows, manipulating the one used above:
+
+```{r}
+E <- t(D)
+```
+
+
+### 5.2.1. Importing and manipulating the data
+
+```{r}
+S <- read.csv2('GGIts.csv',row.names = 1, head = T) 
+S <- S[ , ! apply( S , 2 , function(x) any(is.na(x)) ) ] # eliminating NA's
+dim(S) # 14 years, 106 countries
+S <- S[14:1,] # sorting the years
+S[1,] # first row of the transposed data set
+```
+
+### 5.2.2. Case 1 of interest
+
+Nstable model, assuming a quadratic trend and the level of the series as criteria for clustering; $c_0=c_1=0.001$. Produces $5$ clusters. 
+
+```{r, eval = F, echo = T}
+set.seed(123)
+# we are using the function for annual data
+(tseriesca.out1 <- tseriesca( 
+    S, # data set
+    maxiter = 10000, # number of iterations
+    burnin = 1000, # burn in
+    thinning = 5, # thinning
+    level = T, # consider the level as cluster criteria
+    trend = T, # consider the trend as cluster criteria
+    deg = 2, # consider a quadratic trend
+    scale = F, # our data are already expressed in the same unit of measure
+    # variance distributions parameters
+    c0eps = 0.001, 
+    c1eps = 0.001,
+    c0beta = 0.001,
+    c1beta = 0.001,
+    c0alpha = 0.001,
+    c1alpha = 0.001,
+    # hyper prior on the parameter a of the PD
+    priora = T, # we fix a prior over a
+    pia = 0.5, # suggested value for pi
+    q0a = 1, # suggested value for q0a
+    q1a = 1, # suggested value for q1a
+    # the Nstable process is the special case of PD where b = 0 
+    priorb = F, # we do not fix a prior over b
+    b = 0, # we fix the value 
+    indlpml = T # we want the output to contain the LPML
+  ))
+```
+
+Plotting the clusters:
+```{r, eval = F, echo = T}
+clusterplots(tseriesca.out1, S)
+```
+
+Obtaining the diagnostic plots
+```{r, eval = F, echo = T}
+diagplots(tseriesca.out1)
+```
+
+### 5.2.3. Case 2 of interest
+
+Dirichlet model assuming only a linear trend as clustering criteria (excluding the level); $c_0=c_1=0.001$. Produces $11$ clusters. 
+
+```{r, eval=F, echo=T}
+set.seed(123)
+(tseriesca.out2 <- tseriesca( 
+    S, # data set
+    maxiter = 10000, # number of iterations
+    burnin = 1000, # burn in
+    thinning = 5, # thinning
+    level = F, # don't consider the level as cluster criteria
+    trend = T, # consider the trend as cluster criteria
+    deg = 1, # consider a linear trend
+    scale = F, # our data are already expressed in the same unit of measure
+    # variance distributions parameters
+    c0eps = 0.001, 
+    c1eps = 0.001,
+    c0beta = 0.001,
+    c1beta = 0.001,
+    c0alpha = 0.001,
+    c1alpha = 0.001,
+    # the Dirichlet process is a special case of PD when a=0
+    priora = F, # we do not fix a prior over a
+    a = 0, # we fix the value of a
+    # hyper prior on the parameter b of the PD
+    priorb = T, # we fix a prior over b
+    q0b = 1, # suggested value for q0b
+    q1b = 1, # suggested value for q1b
+    b = 0.01, # for the algorithm to work, b needs to be greater 
+    # than a (since we set a prior over b, this argument is
+    # interpreted as a starting point)
+    indlpml = T # we want the output to contain the LPML
+  ))
+```
+
+
+Plotting the clusters:
+```{r, eval=F, echo=T}
+clusterplots(tseriesca.out2, S)
+```
+
+Obtaining the diagnostic plots:
+```{r, eval=F, echo=T}
+diagplots(tseriesca.out2)
+```
+
+
+### 5.2.4. Case 3 of interest
+
+Poisson Dirichlet process assuming only the level as clustering criteria; $c_0=c_1=0.001$. Produces $53$ clusters. 
+```{r, eval=F, echo=T}
+#set.seed(123)
+(tseriesca.out3 <- tseriesca( 
+    S, # data set
+    maxiter = 10000, # number of iterations
+    burnin = 1000, # burn in
+    thinning = 5, # thinning
+    level = T, # consider the level as cluster criteria
+    trend = F, # don't consider the trend as cluster criteria
+    scale = F, # our data are already expressed in the same unit of measure
+    # variance distributions parameters
+    c0eps = 0.001, 
+    c1eps = 0.001,
+    c0beta = 0.001,
+    c1beta = 0.001,
+    c0alpha = 0.001,
+    c1alpha = 0.001,
+    # hyper prior on the parameter a of the PD
+    priora = T, # we fix a prior over a 
+    pia = 0.5, # suggested value for pi
+    q0a = 1, # suggested value for q0a
+    q1a = 1, # suggested value for q1a
+    # hyper prior on the parameter b of the PD
+    priorb = T, # we fix a prior over b
+    q0b = 1, # suggested value for q0b
+    q1b = 1, # suggested value for q1b
+    indlpml = T # we want the output to contain the LPML
+  ))
+```
+
+Plotting the clusters:
+```{r, eval=F, echo=T}
+clusterplots(tseriesca.out3, S)
+```
+
+Obtaining the diagnostic plots:
+```{r, eval=F, echo=T}
+diagplots(tseriesca.out3)
+```
+
+***
